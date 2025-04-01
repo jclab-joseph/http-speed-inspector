@@ -69,19 +69,21 @@ func main() {
 	var wg sync.WaitGroup
 
 	testCtx := &TestContext{
-		ctx:        ctx,
-		log:        logger.Sugar(),
-		httpClient: httpClient,
-		writeApi:   writeApi,
-		Client:     hostname,
-		Server:     *serverURL,
-		errorStats: testmetric.NewErrorStats(),
-		Timeout:    time.Duration(*timeout) * time.Second,
+		ctx:          ctx,
+		log:          logger.Sugar(),
+		httpClient:   httpClient,
+		writeApi:     writeApi,
+		Client:       hostname,
+		Server:       *serverURL,
+		successStats: testmetric.NewCounterStat(),
+		errorStats:   testmetric.NewCounterStat(),
+		Timeout:      time.Duration(*timeout) * time.Second,
 	}
 	basicMeta := map[string]string{
 		"client": testCtx.Client,
 		"server": testCtx.Server,
 	}
+	testCtx.successStats.RegisterTest("http/keep-alive", "http/close")
 	testCtx.errorStats.RegisterTest("http/keep-alive", "http/close")
 
 	wg.Add(2)
@@ -112,11 +114,18 @@ func main() {
 			case <-ctx.Done():
 				break loop
 			case <-ticker.C:
-				point := testCtx.errorStats.GetPointAndReset(
+				point := testCtx.successStats.GetPointAndReset(
+					"success_count",
+					basicMeta,
+				)
+				writeApi.WritePoint(point)
+
+				point = testCtx.errorStats.GetPointAndReset(
 					"error_count",
 					basicMeta,
 				)
 				writeApi.WritePoint(point)
+
 				writeApi.Flush()
 			}
 		}
@@ -174,11 +183,12 @@ func initLogger(logEnabled bool, logPath string, logLevel string) (*zap.Logger, 
 }
 
 type TestContext struct {
-	ctx        context.Context
-	httpClient *http.Client
-	writeApi   api.WriteAPI
-	errorStats *testmetric.ErrorStats
-	log        *zap.SugaredLogger
+	ctx          context.Context
+	httpClient   *http.Client
+	writeApi     api.WriteAPI
+	successStats *testmetric.CounterStat
+	errorStats   *testmetric.CounterStat
+	log          *zap.SugaredLogger
 
 	Client  string
 	Server  string
@@ -248,6 +258,8 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 				t.log.Warnf("unmarshal failed: %v", err)
 				return
 			}
+
+			t.successStats.IncrementError(testName)
 
 			t3 := data.First
 			latencySec := float64((t4-t1)-(t3-t2)) / 2.0 / 1000000000.0

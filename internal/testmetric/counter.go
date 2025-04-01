@@ -7,30 +7,30 @@ import (
 	"time"
 )
 
-type ErrorStats struct {
+type CounterStat struct {
 	counters map[string]int
 	mu       sync.Mutex
 }
 
-func NewErrorStats() *ErrorStats {
-	return &ErrorStats{
+func NewCounterStat() *CounterStat {
+	return &CounterStat{
 		counters: make(map[string]int),
 	}
 }
 
-func (e *ErrorStats) RegisterTest(testNames ...string) {
+func (e *CounterStat) RegisterTest(testNames ...string) {
 	for _, testName := range testNames {
 		e.counters[testName] = 0
 	}
 }
 
-func (e *ErrorStats) IncrementError(testName string) {
+func (e *CounterStat) IncrementError(testName string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.counters[testName]++
 }
 
-func (e *ErrorStats) GetCountsAndReset() map[string]interface{} {
+func (e *CounterStat) GetCountsAndReset() map[string]interface{} {
 	output := make(map[string]interface{})
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -40,7 +40,7 @@ func (e *ErrorStats) GetCountsAndReset() map[string]interface{} {
 	}
 	return output
 }
-func (e *ErrorStats) GetPointAndReset(measurement string, tags map[string]string) *write.Point {
+func (e *CounterStat) GetPointAndReset(measurement string, tags map[string]string) *write.Point {
 	counters := e.GetCountsAndReset()
 	return influxdb2.NewPoint(
 		measurement,
