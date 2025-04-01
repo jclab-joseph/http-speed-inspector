@@ -148,7 +148,7 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 		if !errors.Is(err, context.Canceled) {
 			t.errorStats.IncrementError(testName)
 		}
-		log.Printf("Request failed: %v", err)
+		log.Printf("[%s] Request failed: %+v", testName, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -221,7 +221,8 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				log.Printf("read failed: %+v", err)
+				log.Printf("[%s] Read failed: %+v", testName, err)
+				t.errorStats.IncrementError(testName)
 			}
 			break
 		}
