@@ -103,7 +103,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		ticker := time.NewTicker(time.Second * 10)
+		ticker := time.NewTicker(time.Second * 60)
 		defer ticker.Stop()
 
 	loop:
