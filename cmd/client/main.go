@@ -11,6 +11,7 @@ import (
 	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/jclab-joseph/http-speed-inspector/internal/apputil"
 	"github.com/jclab-joseph/http-speed-inspector/internal/fixedjson"
+	"github.com/jclab-joseph/http-speed-inspector/internal/testmetric"
 	"io"
 	"log"
 	"net/http"
@@ -30,6 +31,7 @@ func main() {
 	influxOrg := flag.String("influx-org", "primary", "InfluxDB organization")
 	influxBucket := flag.String("influx-bucket", "network-test", "InfluxDB bucket")
 	size := flag.Int("size", 10, "Size in MiB")
+	timeout := flag.Int("timeout", 60, "timeout seconds")
 	flag.Parse()
 
 	// Create InfluxDB client
@@ -52,10 +54,19 @@ func main() {
 	var wg sync.WaitGroup
 
 	testCtx := &TestContext{
-		writeApi: writeApi,
-		Client:   hostname,
-		Server:   *serverURL,
+		ctx:        ctx,
+		httpClient: httpClient,
+		writeApi:   writeApi,
+		Client:     hostname,
+		Server:     *serverURL,
+		errorStats: testmetric.NewErrorStats(),
+		Timeout:    time.Duration(*timeout) * time.Second,
 	}
+	basicMeta := map[string]string{
+		"client": testCtx.Client,
+		"server": testCtx.Server,
+	}
+	testCtx.errorStats.RegisterTest("http/keep-alive", "http/close")
 
 	wg.Add(2)
 	go func() {
@@ -63,28 +74,33 @@ func main() {
 
 		// Run tests
 		log.Println("Starting TEST1 (keep-alive)")
-		testCtx.runTest(ctx, httpClient, *serverURL, false, *size, "http/keep-alive")
+		testCtx.testWorker("http/keep-alive", false, *size)
 	}()
 	go func() {
 		defer wg.Done()
 
 		log.Println("Starting TEST2 (close)")
-		testCtx.runTest(ctx, httpClient, *serverURL, true, *size, "http/close")
+		testCtx.testWorker("http/close", true, *size)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		t := time.NewTicker(time.Second)
-		defer t.Stop()
+		ticker := time.NewTicker(time.Second * 10)
+		defer ticker.Stop()
 
 	loop:
 		for ctx.Err() == nil {
 			select {
 			case <-ctx.Done():
 				break loop
-			case <-t.C:
+			case <-ticker.C:
+				point := testCtx.errorStats.GetPointAndReset(
+					"error_count",
+					basicMeta,
+				)
+				writeApi.WritePoint(point)
 				writeApi.Flush()
 			}
 		}
@@ -94,28 +110,51 @@ func main() {
 }
 
 type TestContext struct {
-	writeApi api.WriteAPI
+	ctx        context.Context
+	httpClient *http.Client
+	writeApi   api.WriteAPI
+	errorStats *testmetric.ErrorStats
 
-	Client string
-	Server string
+	Client  string
+	Server  string
+	Timeout time.Duration
 }
 
-func (t *TestContext) runTest(ctx context.Context, client *http.Client, serverURL string, close bool, size int, testName string) {
-	for ctx.Err() == nil {
-		url := fmt.Sprintf("%s/api/downloading?close=%v&size=%d", serverURL, close, size)
-
-		clientSentAt := time.Now()
-		resp, err := client.Get(url)
-		t4 := apputil.GetNano()
-		if err != nil {
-			log.Printf("Request failed: %v", err)
-			continue
-		}
-		t.handleSimpleResponse(clientSentAt, t4, resp, size*1024*1024, testName)
+func (t *TestContext) testWorker(testName string, isClose bool, size int) {
+	for t.ctx.Err() == nil {
+		t.testOnce(testName, isClose, size)
 	}
 }
 
-func (t *TestContext) handleSimpleResponse(clientSentAt time.Time, t4 int64, resp *http.Response, size int, testName string) {
+func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
+	url := fmt.Sprintf("%s/api/downloading?close=%v&size=%d", t.Server, isClose, sizeMb)
+	size := sizeMb * 1048576
+
+	reqCtx, cancel := context.WithTimeout(t.ctx, t.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+	if err != nil {
+		log.Printf("ERROR: %+v", err)
+	}
+	clientSentAt := time.Now()
+	resp, err := t.httpClient.Do(req)
+	t4 := apputil.GetNano()
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			t.errorStats.IncrementError(testName)
+		}
+		log.Printf("Request failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[%s] Request failed: code=%d", testName, resp.StatusCode)
+		t.errorStats.IncrementError(testName)
+		return
+	}
+
 	// t1 [client] t1
 	// t2 [server] serverReceivedAt
 	// t3 [server] serverFirstSentAt
