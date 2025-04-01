@@ -12,6 +12,8 @@ import (
 	"github.com/jclab-joseph/http-speed-inspector/internal/apputil"
 	"github.com/jclab-joseph/http-speed-inspector/internal/fixedjson"
 	"github.com/jclab-joseph/http-speed-inspector/internal/testmetric"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"io"
 	"log"
 	"net/http"
@@ -32,7 +34,20 @@ func main() {
 	influxBucket := flag.String("influx-bucket", "network-test", "InfluxDB bucket")
 	size := flag.Int("size", 10, "Size in MiB")
 	timeout := flag.Int("timeout", 60, "timeout seconds")
+
+	logEnabled := flag.Bool("log-enabled", false, "Enable logging to file")
+	logPath := flag.String("log-path", "speed-inspector.log", "Log file path")
+	logLevel := flag.String("log-level", "info", "Log level (debug, info, warn, error)")
+
 	flag.Parse()
+
+	// zap logging initialize
+	logger, err := initLogger(*logEnabled, *logPath, *logLevel)
+	if err != nil {
+		log.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer logger.Sync()
+	zap.ReplaceGlobals(logger)
 
 	// Create InfluxDB client
 	client := influxdb2.NewClient(*influxURL, *influxToken)
@@ -55,6 +70,7 @@ func main() {
 
 	testCtx := &TestContext{
 		ctx:        ctx,
+		log:        logger.Sugar(),
 		httpClient: httpClient,
 		writeApi:   writeApi,
 		Client:     hostname,
@@ -73,13 +89,13 @@ func main() {
 		defer wg.Done()
 
 		// Run tests
-		log.Println("Starting TEST1 (keep-alive)")
+		testCtx.log.Infof("Starting TEST1 (keep-alive)")
 		testCtx.testWorker("http/keep-alive", false, *size)
 	}()
 	go func() {
 		defer wg.Done()
 
-		log.Println("Starting TEST2 (close)")
+		testCtx.log.Infof("Starting TEST2 (close)")
 		testCtx.testWorker("http/close", true, *size)
 	}()
 
@@ -109,11 +125,60 @@ func main() {
 	wg.Wait()
 }
 
+func initLogger(logEnabled bool, logPath string, logLevel string) (*zap.Logger, error) {
+	// 기본 인코더 설정
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+
+	// Console은 항상 Debug 레벨
+	consoleLevel := zap.NewAtomicLevelAt(zapcore.DebugLevel)
+
+	// File log level 설정
+	fileLevel := zap.NewAtomicLevel()
+	switch logLevel {
+	case "debug":
+		fileLevel.SetLevel(zapcore.DebugLevel)
+	case "info":
+		fileLevel.SetLevel(zapcore.InfoLevel)
+	case "warn":
+		fileLevel.SetLevel(zapcore.WarnLevel)
+	case "error":
+		fileLevel.SetLevel(zapcore.ErrorLevel)
+	default:
+		fileLevel.SetLevel(zapcore.InfoLevel)
+	}
+
+	// 콘솔 출력 설정
+	consoleEncoder := zapcore.NewConsoleEncoder(encoderConfig)
+	consoleSyncer := zapcore.AddSync(os.Stdout)
+
+	var cores []zapcore.Core
+	cores = append(cores, zapcore.NewCore(consoleEncoder, consoleSyncer, consoleLevel))
+
+	// 파일 로깅이 활성화된 경우 파일 출력 설정 추가
+	if logEnabled {
+		fileEncoder := zapcore.NewConsoleEncoder(encoderConfig)
+		fileHandle, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("cannot open log file: %v", err)
+		}
+		fileSyncer := zapcore.AddSync(fileHandle)
+		cores = append(cores, zapcore.NewCore(fileEncoder, fileSyncer, fileLevel))
+	}
+
+	// 모든 코어를 결합
+	core := zapcore.NewTee(cores...)
+	logger := zap.New(core)
+
+	return logger, nil
+}
+
 type TestContext struct {
 	ctx        context.Context
 	httpClient *http.Client
 	writeApi   api.WriteAPI
 	errorStats *testmetric.ErrorStats
+	log        *zap.SugaredLogger
 
 	Client  string
 	Server  string
@@ -135,7 +200,7 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 
 	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
 	if err != nil {
-		log.Printf("ERROR: %+v", err)
+		t.log.Warnf("ERROR: %+v", err)
 	}
 	if isClose {
 		req.Header.Set("Connection", "close")
@@ -148,13 +213,13 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 		if !errors.Is(err, context.Canceled) {
 			t.errorStats.IncrementError(testName)
 		}
-		log.Printf("[%s] Request failed: %+v", testName, err)
+		t.log.Warnf("[%s] Request failed: %+v", testName, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[%s] Request failed: code=%d", testName, resp.StatusCode)
+		t.log.Warnf("[%s] Request failed: code=%d", testName, resp.StatusCode)
 		t.errorStats.IncrementError(testName)
 		return
 	}
@@ -169,7 +234,7 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 
 	t2, err := strconv.ParseInt(resp.Header.Get("x-app-received-at"), 10, 64)
 	if err != nil {
-		log.Printf("parse x-app-received-at failed: %v", err)
+		t.log.Warnf("parse x-app-received-at failed: %v", err)
 		return
 	}
 
@@ -180,7 +245,7 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 			t5 := apputil.GetNano()
 			var data fixedjson.DownloadResponse
 			if err := json.Unmarshal(output, &data); err != nil {
-				log.Printf("unmarshal failed: %v", err)
+				t.log.Warnf("unmarshal failed: %v", err)
 				return
 			}
 
@@ -189,11 +254,11 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 
 			duration := float64(t5-t1) / 1000000000.0
 			bps := int64(float64(size*8) / float64(duration))
-			//log.Printf("DONE: duration=%f s, latency=%f us", duration, latencyUs)
-			//log.Printf("\tbps : %f mbps", mbps)
-			//log.Printf("\tt4-t1 : %d", t4-t1)
-			//log.Printf("\tt3-t2 : %d", t3-t2)
-			//log.Printf("\tTotalRead : %d", cb.TotalRead)
+			//t.log.Warnf("DONE: duration=%f s, latency=%f us", duration, latencyUs)
+			//t.log.Warnf("\tbps : %f mbps", mbps)
+			//t.log.Warnf("\tt4-t1 : %d", t4-t1)
+			//t.log.Warnf("\tt3-t2 : %d", t3-t2)
+			//t.log.Warnf("\tTotalRead : %d", cb.TotalRead)
 
 			logMeta := &LogMeta{
 				Server: t.Server,
@@ -215,13 +280,13 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 			)
 			t.writeApi.WritePoint(point)
 
-			log.Printf("[%s] duration=%.3fs, latency=%.4fs, bps=%.3f Mbps", testName, duration, latencySec, float64(bps)/1000000)
+			t.log.Debugf("[%s] duration=%.3fs, latency=%.4fs, bps=%.3f Mbps", testName, duration, latencySec, float64(bps)/1000000)
 
 			_ = lastReceivedAt
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				log.Printf("[%s] Read failed: %+v", testName, err)
+				t.log.Warnf("[%s] Read failed: %+v", testName, err)
 				t.errorStats.IncrementError(testName)
 			}
 			break
