@@ -172,7 +172,7 @@ func (t *TestContext) handleSimpleResponse(clientSentAt time.Time, t4 int64, res
 			)
 			t.writeApi.WritePoint(point)
 
-			log.Printf("duration=%.3fs, latency=%.4fs, bps=%.3f Mbps", duration, latencySec, float64(bps)/1000000)
+			log.Printf("[%s] duration=%.3fs, latency=%.4fs, bps=%.3f Mbps", testName, duration, latencySec, float64(bps)/1000000)
 
 			_ = lastReceivedAt
 		}
