@@ -137,6 +137,10 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 	if err != nil {
 		log.Printf("ERROR: %+v", err)
 	}
+	if isClose {
+		req.Header.Set("Connection", "close")
+	}
+
 	clientSentAt := time.Now()
 	resp, err := t.httpClient.Do(req)
 	t4 := apputil.GetNano()
