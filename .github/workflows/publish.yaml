@@ -23,6 +23,7 @@ jobs:
           mkdir -p dist/server/ dist/client/
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/server/server-linux-x86_64.exe ./cmd/server
           GOOS=windows GOARCH=amd64 go build -o dist/client/client-windows-amd64.exe ./cmd/client
+          GOOS=linux GOARCH=amd64 go build -o dist/client/client-linux-amd64.exe ./cmd/client
 
       - name: Archive production artifacts
         uses: actions/upload-artifact@v4
