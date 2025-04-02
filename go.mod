@@ -3,6 +3,7 @@ module github.com/jclab-joseph/http-speed-inspector
 go 1.24
 
 require (
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/influxdata/influxdb-client-go/v2 v2.14.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/sys v0.18.0

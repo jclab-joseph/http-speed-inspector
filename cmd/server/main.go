@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"github.com/jclab-joseph/http-speed-inspector/internal/apputil"
 	"github.com/jclab-joseph/http-speed-inspector/internal/fixedjson"
+	"github.com/jclab-joseph/http-speed-inspector/internal/tcpawarehttp"
+	"github.com/jclab-joseph/http-speed-inspector/pkg/tcpinfo"
 	"log"
 	"net/http"
 	"strconv"
@@ -17,6 +19,9 @@ func main() {
 	http.HandleFunc("/api/downloading", func(w http.ResponseWriter, r *http.Request) {
 		receivedAt := apputil.GetNano()
 		var firstStartAt int64 = 0
+
+		tcpCtx := tcpawarehttp.GetTcpCtx(r.Context())
+		connCtx := tcpCtx.GetConnCtx()
 
 		sizeStr := r.URL.Query().Get("size")
 		closeStr := r.URL.Query().Get("close")
@@ -62,6 +67,15 @@ func main() {
 			First: firstStartAt,
 			Last:  apputil.GetNano(),
 		}
+
+		tcpInfo, err := tcpinfo.GetTcpInfo(tcpCtx.NativeConn)
+		if err != nil {
+			log.Printf("GetTcpInfo failed: %+v", err)
+		} else {
+			curTotalRetrans := tcpInfo.GetTotalRetrans()
+			response.TotalRetrans = curTotalRetrans - connCtx.PrevTotalRetrans
+			connCtx.PrevTotalRetrans = curTotalRetrans
+		}
 		if err := fixedjson.Write(w, response, fixedjson.DownloadResponseSize); err != nil {
 			log.Printf("Failed to write response: %+v", err)
 			return
@@ -70,7 +84,11 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("Server starting on %s", addr)
-	if err := http.ListenAndServe(addr, nil); err != nil {
+
+	handler := &tcpawarehttp.TcpAwareHandler{
+		Handler: http.DefaultServeMux,
+	}
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatal(err)
 	}
 }
