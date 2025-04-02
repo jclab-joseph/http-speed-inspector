@@ -73,8 +73,11 @@ func main() {
 			log.Printf("GetTcpInfo failed: %+v", err)
 		} else {
 			curTotalRetrans := tcpInfo.GetTotalRetrans()
+			curSegsOut := tcpInfo.GetSegsOut()
 			response.TotalRetrans = curTotalRetrans - connCtx.PrevTotalRetrans
+			response.SegsOut = curSegsOut - connCtx.PrevSegsOut
 			connCtx.PrevTotalRetrans = curTotalRetrans
+			connCtx.PrevSegsOut = curSegsOut
 		}
 		if err := fixedjson.Write(w, response, fixedjson.DownloadResponseSize); err != nil {
 			log.Printf("Failed to write response: %+v", err)

@@ -17,6 +17,7 @@ type DownloadResponse struct {
 	// Last nano time of end response
 	Last         int64 `json:"last"`
 	TotalRetrans int   `json:"totalRetrans"`
+	SegsOut      int   `json:"segsOut"`
 }
 
 type ConsumeBuffer struct {

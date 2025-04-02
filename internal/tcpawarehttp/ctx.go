@@ -22,6 +22,7 @@ type TcpCtx struct {
 }
 
 type ConnCtx struct {
+	PrevSegsOut      int
 	PrevTotalRetrans int
 }
 

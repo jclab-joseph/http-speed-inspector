@@ -18,6 +18,10 @@ func (t *UnixTCPInfo) GetTotalRetrans() int {
 	return int(t.Total_retrans)
 }
 
+func (t *UnixTCPInfo) GetSegsOut() int {
+	return int(t.Segs_out)
+}
+
 func GetTcpInfo(conn net.Conn) (*UnixTCPInfo, error) {
 	// Get TCP info before closing
 	if tcpConn, ok := conn.(*net.TCPConn); ok {

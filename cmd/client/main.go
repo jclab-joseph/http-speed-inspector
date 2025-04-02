@@ -279,10 +279,12 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 				Name:   testName,
 			}
 			logData := &LogData{
-				Duration:     duration,
-				Bps:          bps,
-				Latency:      latencySec,
-				TotalRetrans: data.TotalRetrans,
+				Duration:               duration,
+				Bps:                    bps,
+				Latency:                latencySec,
+				TotalRetrans:           data.TotalRetrans,
+				SegsOut:                data.SegsOut,
+				TotalRetransPercentage: float64(data.TotalRetrans) / float64(data.SegsOut) * 100.0,
 			}
 
 			point := influxdb2.NewPoint(
@@ -324,17 +326,21 @@ func (m *LogMeta) ToMap() map[string]string {
 }
 
 type LogData struct {
-	Duration     float64 `json:"duration"`
-	Latency      float64 `json:"latency"`
-	Bps          int64   `json:"bps"`
-	TotalRetrans int     `json:"total_retrans"`
+	Duration               float64 `json:"duration"`
+	Latency                float64 `json:"latency"`
+	Bps                    int64   `json:"bps"`
+	TotalRetrans           int     `json:"total_retrans"`
+	SegsOut                int     `json:"segs_out"`
+	TotalRetransPercentage float64 `json:"total_retrans_percentage"`
 }
 
 func (m *LogData) ToMap() map[string]interface{} {
 	return map[string]interface{}{
-		"duration":      m.Duration,
-		"latency":       m.Latency,
-		"bps":           m.Bps,
-		"total_retrans": m.TotalRetrans,
+		"duration":                 m.Duration,
+		"latency":                  m.Latency,
+		"bps":                      m.Bps,
+		"total_retrans":            m.TotalRetrans,
+		"segs_out":                 m.SegsOut,
+		"total_retrans_percentage": m.TotalRetransPercentage,
 	}
 }
