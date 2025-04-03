@@ -11,6 +11,7 @@ import (
 	"github.com/influxdata/influxdb-client-go/v2/api"
 	"github.com/jclab-joseph/http-speed-inspector/internal/apputil"
 	"github.com/jclab-joseph/http-speed-inspector/internal/fixedjson"
+	"github.com/jclab-joseph/http-speed-inspector/internal/tcpawarehttp"
 	"github.com/jclab-joseph/http-speed-inspector/internal/testmetric"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -76,6 +77,7 @@ func main() {
 	}
 	httpClient := &http.Client{
 		Transport: &http.Transport{
+			DialContext:     tcpawarehttp.DialContext,
 			TLSClientConfig: defaultTlsConfig,
 		},
 	}
@@ -301,6 +303,7 @@ func (t *TestContext) httpDownloadTestOnce(testName string, isClose bool, sizeMb
 	size := sizeMb * 1048576
 
 	reqCtx, cancel := context.WithTimeout(t.ctx, t.Timeout)
+	reqCtx, dialCtx := tcpawarehttp.WithDialCtx(reqCtx)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
@@ -399,7 +402,7 @@ func (t *TestContext) httpDownloadTestOnce(testName string, isClose bool, sizeMb
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				t.log.Warnf("[%s] Read failed: %+v", testName, err)
+				t.log.Warnf("[%s] Read failed: local=%+v, %+v", testName, dialCtx.LocalAddr, err)
 				t.errorStats.Increment(testName)
 			}
 			break
@@ -410,6 +413,7 @@ func (t *TestContext) httpDownloadTestOnce(testName string, isClose bool, sizeMb
 func (t *TestContext) httpConnectTestWorker(testName string, tlsConfig *tls.Config) {
 	httpClient := &http.Client{
 		Transport: &http.Transport{
+			DialContext:       tcpawarehttp.DialContext,
 			TLSClientConfig:   tlsConfig,
 			DisableKeepAlives: true,
 		},
