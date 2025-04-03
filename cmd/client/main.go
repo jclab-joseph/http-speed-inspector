@@ -108,8 +108,6 @@ func main() {
 		"client": testCtx.Client,
 		"server": testCtx.Server,
 	}
-	testCtx.successStats.RegisterTest(testList...)
-	testCtx.errorStats.RegisterTest(testList...)
 
 	if tests["http/keep-alive"] {
 		wg.Add(1)
@@ -121,6 +119,8 @@ func main() {
 			if len(*tlsVersion) > 0 {
 				testName += "/tls" + *tlsVersion
 			}
+			testCtx.successStats.RegisterTest(testName)
+			testCtx.errorStats.RegisterTest(testName)
 			testCtx.log.Infof("Starting TEST: %s", testName)
 			testCtx.httpDownloadTestWorker(testName, false, *size)
 		}()
@@ -135,6 +135,8 @@ func main() {
 			if len(*tlsVersion) > 0 {
 				testName += "/tls" + *tlsVersion
 			}
+			testCtx.successStats.RegisterTest(testName)
+			testCtx.errorStats.RegisterTest(testName)
 			testCtx.log.Infof("Starting TEST: %s", testName)
 			testCtx.httpDownloadTestWorker(testName, true, *size)
 		}()
@@ -149,6 +151,8 @@ func main() {
 			if len(*tlsVersion) > 0 {
 				testName += "/tls" + *tlsVersion
 			}
+			testCtx.successStats.RegisterTest(testName)
+			testCtx.errorStats.RegisterTest(testName)
 			testCtx.log.Infof("Starting TEST: %s", testName)
 			testCtx.httpConnectTestWorker(testName, defaultTlsConfig)
 		}()
@@ -163,6 +167,8 @@ func main() {
 				MinVersion: tls.VersionTLS12,
 				MaxVersion: tls.VersionTLS12,
 			}
+			testCtx.successStats.RegisterTest("tls1.2/connect")
+			testCtx.errorStats.RegisterTest("tls1.2/connect")
 			testCtx.httpConnectTestWorker("tls1.2/connect", tlsConfig)
 		}()
 	}
@@ -176,6 +182,8 @@ func main() {
 				MinVersion: tls.VersionTLS13,
 				MaxVersion: tls.VersionTLS13,
 			}
+			testCtx.successStats.RegisterTest("tls1.3/connect")
+			testCtx.errorStats.RegisterTest("tls1.3/connect")
 			testCtx.httpConnectTestWorker("tls1.3/connect", tlsConfig)
 		}()
 	}

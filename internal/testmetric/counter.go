@@ -16,6 +16,8 @@ func NewCounterStat() *CounterStat {
 }
 
 func (e *CounterStat) RegisterTest(testNames ...string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for _, testName := range testNames {
 		e.counters[testName] = 0
 	}
