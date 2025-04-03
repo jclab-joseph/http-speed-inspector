@@ -70,6 +70,7 @@ func main() {
 	case "1.3":
 		defaultTlsConfig.MinVersion = tls.VersionTLS13
 		defaultTlsConfig.MaxVersion = tls.VersionTLS13
+	case "":
 	default:
 		log.Fatalf("unknown tlsVersion: %s", *tlsVersion)
 	}
