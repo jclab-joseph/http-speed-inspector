@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -27,19 +28,27 @@ import (
 
 func main() {
 	// Parse command line flags
-	serverURL := flag.String("server", "", "Target server URL")
+	serverURL := flag.String("server", "http://127.0.0.1:3000", "Target server URL")
 	influxURL := flag.String("influx-url", "", "InfluxDB server URL")
 	influxToken := flag.String("influx-token", "", "InfluxDB token")
 	influxOrg := flag.String("influx-org", "primary", "InfluxDB organization")
 	influxBucket := flag.String("influx-bucket", "network-test", "InfluxDB bucket")
 	size := flag.Int("size", 10, "Size in MiB")
 	timeout := flag.Int("timeout", 60, "timeout seconds")
+	flushTime := flag.Int("flush-time", 60, "flush time")
 
 	logEnabled := flag.Bool("log-enabled", false, "Enable logging to file")
 	logPath := flag.String("log-path", "speed-inspector.log", "Log file path")
 	logLevel := flag.String("log-level", "info", "Log level (debug, info, warn, error)")
 
+	testsFlag := flag.String("tests", "http/close,http/keep-alive,http/connect,tls1.2/connect,tls1.3/connect", "")
 	flag.Parse()
+
+	tests := make(map[string]bool)
+	testList := strings.Split(*testsFlag, ",")
+	for _, v := range testList {
+		tests[v] = true
+	}
 
 	// zap logging initialize
 	logger, err := initLogger(*logEnabled, *logPath, *logLevel)
@@ -49,17 +58,13 @@ func main() {
 	defer logger.Sync()
 	zap.ReplaceGlobals(logger)
 
-	// Create InfluxDB client
-	client := influxdb2.NewClient(*influxURL, *influxToken)
-	defer client.Close()
-	writeApi := client.WriteAPI(*influxOrg, *influxBucket)
-
 	hostname, _ := os.Hostname()
 
 	// Create HTTP client with TLS skip verify
+	defaultTlsConfig := &tls.Config{InsecureSkipVerify: true}
 	httpClient := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: defaultTlsConfig,
 		},
 	}
 
@@ -72,40 +77,88 @@ func main() {
 		ctx:          ctx,
 		log:          logger.Sugar(),
 		httpClient:   httpClient,
-		writeApi:     writeApi,
 		Client:       hostname,
 		Server:       *serverURL,
 		successStats: testmetric.NewCounterStat(),
 		errorStats:   testmetric.NewCounterStat(),
 		Timeout:      time.Duration(*timeout) * time.Second,
 	}
+
+	var client influxdb2.Client
+	if len(*influxURL) > 0 {
+		// Create InfluxDB client
+		client = influxdb2.NewClient(*influxURL, *influxToken)
+		defer client.Close()
+		testCtx.writeApi = client.WriteAPI(*influxOrg, *influxBucket)
+	}
+
 	basicMeta := map[string]string{
 		"client": testCtx.Client,
 		"server": testCtx.Server,
 	}
-	testCtx.successStats.RegisterTest("http/keep-alive", "http/close")
-	testCtx.errorStats.RegisterTest("http/keep-alive", "http/close")
+	testCtx.successStats.RegisterTest(testList...)
+	testCtx.errorStats.RegisterTest(testList...)
 
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
+	if tests["http/keep-alive"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		// Run tests
-		testCtx.log.Infof("Starting TEST1 (keep-alive)")
-		testCtx.testWorker("http/keep-alive", false, *size)
-	}()
-	go func() {
-		defer wg.Done()
+			// Run tests
+			testCtx.log.Infof("Starting TEST1 (keep-alive)")
+			testCtx.httpDownloadTestWorker("http/keep-alive", false, *size)
+		}()
+	}
+	if tests["http/close"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-		testCtx.log.Infof("Starting TEST2 (close)")
-		testCtx.testWorker("http/close", true, *size)
-	}()
+			testCtx.log.Infof("Starting TEST2 (close)")
+			testCtx.httpDownloadTestWorker("http/close", true, *size)
+		}()
+	}
+	if tests["http/connect"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			testCtx.log.Infof("Starting http/connect")
+			testCtx.httpConnectTestWorker("http/connect", defaultTlsConfig)
+		}()
+	}
+	if tests["tls1.2/connect"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			testCtx.log.Infof("Starting tls1.2/connect")
+			tlsConfig := &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				MaxVersion: tls.VersionTLS12,
+			}
+			testCtx.httpConnectTestWorker("tls1.2/connect", tlsConfig)
+		}()
+	}
+	if tests["tls1.3/connect"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			testCtx.log.Infof("Starting tls1.3/connect")
+			tlsConfig := &tls.Config{
+				MinVersion: tls.VersionTLS13,
+				MaxVersion: tls.VersionTLS13,
+			}
+			testCtx.httpConnectTestWorker("tls1.3/connect", tlsConfig)
+		}()
+	}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		ticker := time.NewTicker(time.Second * 60)
+		ticker := time.NewTicker(time.Second * time.Duration(*flushTime))
 		defer ticker.Stop()
 
 	loop:
@@ -114,19 +167,27 @@ func main() {
 			case <-ctx.Done():
 				break loop
 			case <-ticker.C:
-				point := testCtx.successStats.GetPointAndReset(
-					"success_count",
-					basicMeta,
-				)
-				writeApi.WritePoint(point)
+				successCounts := testCtx.successStats.GetCountsAndReset()
+				errorCounts := testCtx.errorStats.GetCountsAndReset()
 
-				point = testCtx.errorStats.GetPointAndReset(
-					"error_count",
-					basicMeta,
-				)
-				writeApi.WritePoint(point)
-
-				writeApi.Flush()
+				if testCtx.writeApi != nil {
+					testCtx.writeApi.WritePoint(influxdb2.NewPoint(
+						"success_count",
+						basicMeta,
+						successCounts,
+						time.Now(),
+					))
+					testCtx.writeApi.WritePoint(influxdb2.NewPoint(
+						"error_count",
+						basicMeta,
+						errorCounts,
+						time.Now(),
+					))
+					testCtx.writeApi.Flush()
+				} else {
+					log.Printf("successCountPoint: %+v", successCounts)
+					log.Printf("errorCountPoint: %+v", errorCounts)
+				}
 			}
 		}
 	}()
@@ -195,13 +256,13 @@ type TestContext struct {
 	Timeout time.Duration
 }
 
-func (t *TestContext) testWorker(testName string, isClose bool, size int) {
+func (t *TestContext) httpDownloadTestWorker(testName string, isClose bool, size int) {
 	for t.ctx.Err() == nil {
-		t.testOnce(testName, isClose, size)
+		t.httpDownloadTestOnce(testName, isClose, size)
 	}
 }
 
-func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
+func (t *TestContext) httpDownloadTestOnce(testName string, isClose bool, sizeMb int) {
 	url := fmt.Sprintf("%s/api/downloading?close=%v&size=%d", t.Server, isClose, sizeMb)
 	size := sizeMb * 1048576
 
@@ -221,7 +282,7 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 	t4 := apputil.GetNano()
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			t.errorStats.IncrementError(testName)
+			t.errorStats.Increment(testName)
 		}
 		t.log.Warnf("[%s] Request failed: %+v", testName, err)
 		return
@@ -230,7 +291,7 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.log.Warnf("[%s] Request failed: code=%d", testName, resp.StatusCode)
-		t.errorStats.IncrementError(testName)
+		t.errorStats.Increment(testName)
 		return
 	}
 
@@ -259,7 +320,7 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 				return
 			}
 
-			t.successStats.IncrementError(testName)
+			t.successStats.Increment(testName)
 
 			t3 := data.First
 			latencySec := float64((t4-t1)-(t3-t2)) / 2.0 / 1000000000.0
@@ -287,13 +348,16 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 				TotalRetransPercentage: float64(data.TotalRetrans) / float64(data.SegsOut) * 100.0,
 			}
 
-			point := influxdb2.NewPoint(
-				"http",
-				logMeta.ToMap(),
-				logData.ToMap(),
-				clientSentAt,
-			)
-			t.writeApi.WritePoint(point)
+			if t.writeApi != nil {
+				t.writeApi.WritePoint(influxdb2.NewPoint(
+					"http",
+					logMeta.ToMap(),
+					logData.ToMap(),
+					clientSentAt,
+				))
+			} else {
+				log.Printf("[%s] http point: %+v", testName, logData.ToMap())
+			}
 
 			t.log.Debugf("[%s] duration=%.3fs, latency=%.4fs, bps=%.3f Mbps", testName, duration, latencySec, float64(bps)/1000000)
 
@@ -302,11 +366,66 @@ func (t *TestContext) testOnce(testName string, isClose bool, sizeMb int) {
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				t.log.Warnf("[%s] Read failed: %+v", testName, err)
-				t.errorStats.IncrementError(testName)
+				t.errorStats.Increment(testName)
 			}
 			break
 		}
 	}
+}
+
+func (t *TestContext) httpConnectTestWorker(testName string, tlsConfig *tls.Config) {
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   tlsConfig,
+			DisableKeepAlives: true,
+		},
+	}
+	for t.ctx.Err() == nil {
+		t.httpConnectTestOnce(testName, httpClient)
+	}
+}
+
+func (t *TestContext) httpConnectTestOnce(testName string, httpClient *http.Client) {
+	url := fmt.Sprintf("%s/api/ping", t.Server)
+
+	reqCtx, cancel := context.WithTimeout(t.ctx, t.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+	if err != nil {
+		t.log.Warnf("ERROR: %+v", err)
+		return
+	}
+	req.Header.Set("Connection", "close")
+
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			t.errorStats.Increment(testName)
+		}
+		t.log.Warnf("[%s] Request failed: %+v", testName, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.log.Warnf("[%s] Request failed: code=%d", testName, resp.StatusCode)
+		t.errorStats.Increment(testName)
+		return
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.log.Warnf("[%s] Response read failed: %+v", testName, err)
+		t.errorStats.Increment(testName)
+		return
+	}
+	_ = respBody
+
+	t.successStats.Increment(testName)
+
+	t.log.Infof("[%s] success", testName)
+	time.Sleep(time.Millisecond * 10)
 }
 
 type LogMeta struct {

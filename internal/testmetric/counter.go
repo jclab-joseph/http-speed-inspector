@@ -1,10 +1,7 @@
 package testmetric
 
 import (
-	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
-	"github.com/influxdata/influxdb-client-go/v2/api/write"
 	"sync"
-	"time"
 )
 
 type CounterStat struct {
@@ -24,7 +21,7 @@ func (e *CounterStat) RegisterTest(testNames ...string) {
 	}
 }
 
-func (e *CounterStat) IncrementError(testName string) {
+func (e *CounterStat) Increment(testName string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.counters[testName]++
@@ -39,13 +36,4 @@ func (e *CounterStat) GetCountsAndReset() map[string]interface{} {
 		e.counters[k] = 0
 	}
 	return output
-}
-func (e *CounterStat) GetPointAndReset(measurement string, tags map[string]string) *write.Point {
-	counters := e.GetCountsAndReset()
-	return influxdb2.NewPoint(
-		measurement,
-		tags,
-		counters,
-		time.Now(),
-	)
 }

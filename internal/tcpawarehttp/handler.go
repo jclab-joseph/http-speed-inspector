@@ -17,8 +17,6 @@ func (h *TcpAwareHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rwc, err := getRwcFromResponse(w)
 	if err != nil {
 		log.Printf("Error getting rwc: %v", err)
-	} else {
-		log.Printf("RWC : %+v", rwc)
 	}
 	// Serve the original handler
 	reqCtx, _ := WithTcpCtx(r.Context(), rwc)

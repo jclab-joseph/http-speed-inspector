@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/jclab-joseph/http-speed-inspector/internal/apputil"
@@ -15,6 +16,20 @@ import (
 func main() {
 	port := flag.Int("port", 3000, "Server port")
 	flag.Parse()
+
+	http.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+		raw, err := json.Marshal(&map[string]any{
+			"status": "OK",
+		})
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(raw)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+	})
 
 	http.HandleFunc("/api/downloading", func(w http.ResponseWriter, r *http.Request) {
 		receivedAt := apputil.GetNano()
