@@ -42,6 +42,7 @@ func main() {
 	logLevel := flag.String("log-level", "info", "Log level (debug, info, warn, error)")
 
 	testsFlag := flag.String("tests", "http/close,http/keep-alive,http/connect,tls1.2/connect,tls1.3/connect", "")
+	tlsVersion := flag.String("tls-version", "", "1.2 or 1.3")
 	flag.Parse()
 
 	tests := make(map[string]bool)
@@ -62,6 +63,16 @@ func main() {
 
 	// Create HTTP client with TLS skip verify
 	defaultTlsConfig := &tls.Config{InsecureSkipVerify: true}
+	switch *tlsVersion {
+	case "1.2":
+		defaultTlsConfig.MinVersion = tls.VersionTLS12
+		defaultTlsConfig.MaxVersion = tls.VersionTLS12
+	case "1.3":
+		defaultTlsConfig.MinVersion = tls.VersionTLS13
+		defaultTlsConfig.MaxVersion = tls.VersionTLS13
+	default:
+		log.Fatalf("unknown tlsVersion: %s", *tlsVersion)
+	}
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: defaultTlsConfig,
@@ -105,8 +116,12 @@ func main() {
 			defer wg.Done()
 
 			// Run tests
-			testCtx.log.Infof("Starting TEST1 (keep-alive)")
-			testCtx.httpDownloadTestWorker("http/keep-alive", false, *size)
+			testName := "http/keep-alive"
+			if len(*tlsVersion) > 0 {
+				testName += "/tls" + *tlsVersion
+			}
+			testCtx.log.Infof("Starting TEST: %s", testName)
+			testCtx.httpDownloadTestWorker(testName, false, *size)
 		}()
 	}
 	if tests["http/close"] {
@@ -114,8 +129,13 @@ func main() {
 		go func() {
 			defer wg.Done()
 
-			testCtx.log.Infof("Starting TEST2 (close)")
-			testCtx.httpDownloadTestWorker("http/close", true, *size)
+			// Run tests
+			testName := "http/keep-close"
+			if len(*tlsVersion) > 0 {
+				testName += "/tls" + *tlsVersion
+			}
+			testCtx.log.Infof("Starting TEST: %s", testName)
+			testCtx.httpDownloadTestWorker(testName, true, *size)
 		}()
 	}
 	if tests["http/connect"] {
@@ -123,8 +143,13 @@ func main() {
 		go func() {
 			defer wg.Done()
 
-			testCtx.log.Infof("Starting http/connect")
-			testCtx.httpConnectTestWorker("http/connect", defaultTlsConfig)
+			// Run tests
+			testName := "http/connect"
+			if len(*tlsVersion) > 0 {
+				testName += "/tls" + *tlsVersion
+			}
+			testCtx.log.Infof("Starting TEST: %s", testName)
+			testCtx.httpConnectTestWorker(testName, defaultTlsConfig)
 		}()
 	}
 	if tests["tls1.2/connect"] {
