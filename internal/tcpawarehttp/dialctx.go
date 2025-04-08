@@ -10,8 +10,10 @@ type DialCtx struct {
 	RemoteAddr net.Addr
 }
 
+var defaultDialer net.Dialer
+
 func DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	conn, err := net.Dial(network, addr)
+	conn, err := defaultDialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
